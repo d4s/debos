@@ -17,6 +17,9 @@ Mandatory properties:
 Optional properties:
 
 - recommends -- boolean indicating if suggested packages will be installed
+
+- allow-services -- allow to (re-)start services from packages pre/post-install scripts.
+Boolean property defaults to 'false'.
 */
 package actions
 
@@ -28,11 +31,17 @@ type AptAction struct {
 	debos.BaseAction `yaml:",inline"`
 	Recommends       bool
 	Packages         []string
+	AllowServices    bool `yaml:"allow-services"`
 }
 
 func (apt *AptAction) Run(context *debos.DebosContext) error {
 	apt.LogStart()
 	aptOptions := []string{"apt-get", "-y"}
+
+	if apt.AllowServices != true {
+		debos.ServicePolicyHelper(debos.DenyServices)
+		defer debos.ServicePolicyHelper(debos.AllowServices)
+	}
 
 	if !apt.Recommends {
 		aptOptions = append(aptOptions, "--no-install-recommends")
