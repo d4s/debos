@@ -33,21 +33,30 @@ func main() {
 		Shell         string            `short:"s" long:"shell" description:"Redefine interactive shell binary (default: bash)" optionsl:"" default:"/bin/bash"`
 	}
 
+	var exitcode int = 0
+	// Allow to run all deferred calls prior to os.Exit()
+	defer func() {
+		os.Exit(exitcode)
+	}()
+
 	parser := flags.NewParser(&options, flags.Default)
 	args, err := parser.Parse()
 
 	if err != nil {
 		flagsErr, ok := err.(*flags.Error)
 		if ok && flagsErr.Type == flags.ErrHelp {
-			os.Exit(0)
+			return
 		} else {
 			fmt.Printf("%v\n", flagsErr)
-			os.Exit(1)
+			exitcode = 1
+			return
 		}
 	}
 
 	if len(args) != 1 {
-		log.Fatal("No recipe given!")
+		log.Println("No recipe given!")
+		exitcode = 1
+		return
 	}
 
 	// Set interactive shell binary only if '--debug-shell' options passed
@@ -122,10 +131,10 @@ func main() {
 			bailOnError(context, err, a, "PreMachine")
 		}
 
-		ret := m.RunInMachineWithArgs(args)
+		exitcode = m.RunInMachineWithArgs(args)
 
-		if ret != 0 {
-			os.Exit(ret)
+		if exitcode != 0 {
+			return
 		}
 
 		for _, a := range r.Actions {
@@ -134,7 +143,7 @@ func main() {
 		}
 
 		log.Printf("==== Recipe done ====")
-		os.Exit(0)
+		return
 	}
 
 	if !fakemachine.InMachine() {
