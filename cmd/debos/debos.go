@@ -6,7 +6,9 @@ import (
 	"log"
 	"os"
 	"path"
+	"path/filepath"
 
+	"github.com/docker/go-units"
 	"github.com/go-debos/debos"
 	"github.com/go-debos/debos/recipe"
 	"github.com/jessevdk/go-flags"
@@ -23,19 +25,62 @@ func checkError(context debos.DebosContext, err error, a debos.Action, stage str
 	return 1
 }
 
+// If option BuildStorageLocation has been passed.
+// Prepare the image formatted as ext4 and setup to mount it to '/scratch'
+// in fake machine
+func prepareBuildImage(m *fakemachine.Machine, buildImagePath string, buildImageSize int64) (string, error) {
+	fi, err := os.Stat(buildImagePath)
+	if err != nil {
+		return "", err
+	}
+	if mode := fi.Mode(); mode.IsDir() != true {
+		return "", fmt.Errorf("Location for temporary build image must have directory type.")
+	}
+
+	buildImage, err := ioutil.TempFile(buildImagePath, ".debos-build-")
+	if err != nil {
+		return "", err
+	}
+
+	if err := buildImage.Truncate(buildImageSize); err != nil {
+		return buildImage.Name(), err
+	}
+
+	label := "/scratch"
+
+	// Format the whole disk image disabling journal support
+	cmdline := []string{}
+	cmdline = append(cmdline, "mkfs.ext4", "-q", "-L", label, buildImage.Name())
+	cmdline = append(cmdline, "-O", "^has_journal")
+	cmd := debos.Command{}
+	if err := cmd.Run(label, cmdline...); err != nil {
+		return buildImage.Name(), err
+	}
+
+	// Add image to fake machine
+	m.CreateImage(buildImage.Name(), -1)
+	m.AddFstabEntry(fmt.Sprintf("LABEL=%s", label),
+		label, "ext4", "defaults", 0, 0)
+
+	return buildImage.Name(), nil
+}
+
 func main() {
 	var context debos.DebosContext
 	var options struct {
-		ArtifactDir   string            `long:"artifactdir"`
-		InternalImage string            `long:"internal-image" hidden:"true"`
-		TemplateVars  map[string]string `short:"t" long:"template-var" description:"Template variables"`
-		DebugShell    bool              `long:"debug-shell" description:"Fall into interactive shell on error"`
-		Shell         string            `short:"s" long:"shell" description:"Redefine interactive shell binary (default: bash)" optionsl:"" default:"/bin/bash"`
+		ArtifactDir          string            `long:"artifactdir"`
+		InternalImage        string            `long:"internal-image" hidden:"true"`
+		TemplateVars         map[string]string `short:"t" long:"template-var" description:"Template variables"`
+		DebugShell           bool              `long:"debug-shell" description:"Fall into interactive shell on error"`
+		Shell                string            `short:"s" long:"shell" description:"Redefine interactive shell binary (default: bash)" optionsl:"" default:"/bin/bash"`
+		BuildStorageLocation string            `short:"b" long:"build-storage" description:"Directory for temporary build image"`
+		BuildStorageSize     string            `long:"build-storage-size" description:"The size of the temporary build image" default:"10gB"`
 	}
 
 	var exitcode int = 0
 	// Allow to run all deferred calls prior to os.Exit()
 	defer func() {
+		fmt.Printf("Exiting...\n")
 		os.Exit(exitcode)
 	}()
 
@@ -120,6 +165,36 @@ func main() {
 			args = append(args, "--template-var", fmt.Sprintf("%s:\"%s\"", k, v))
 		}
 
+		// Prepare build image
+		if len(options.BuildStorageLocation) != 0 {
+			// Exit with errorcode = 1 in case of error
+			exitcode = 1
+
+			buildImageSize, err := units.FromHumanSize(options.BuildStorageSize)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+
+			blddir, err := filepath.Abs(options.BuildStorageLocation)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+
+			buildImage, err := prepareBuildImage(m, blddir, buildImageSize)
+			if len(buildImage) != 0 {
+				defer os.Remove(buildImage)
+			}
+			if err != nil {
+				log.Println(err)
+				return
+			}
+
+			// restore exitcode to success
+			exitcode = 0
+		}
+
 		m.AddVolume(context.RecipeDir)
 		args = append(args, file)
 
@@ -140,7 +215,6 @@ func main() {
 			fmt.Println(err)
 			return
 		}
-
 		if exitcode != 0 {
 			return
 		}
