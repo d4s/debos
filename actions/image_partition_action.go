@@ -42,6 +42,7 @@ Yaml syntax for partitions:
 	   start: offset
 	   end: offset
 	   flags: list of flags
+	   no_fsck: bool
 
 Mandatory properties:
 
@@ -64,6 +65,9 @@ Optional properties:
 - flags -- list of additional flags for partition compatible with parted(8)
 'set' command.
 
+- no_fsck -- if set to `true` -- then set fs_passno (man fstab) to 0 meaning no filesystem
+checks in boot time. By default is set to `false` allowing checks on boot.
+
 Yaml syntax for mount points:
 
    mountpoints:
@@ -82,6 +86,7 @@ should be mounted.
 Optional properties:
 
 - options -- list of options to be added to appropriate entry in fstab file.
+
 - buildtime -- if set to true then the mountpoint only used during the debos run.
 No entry in `/etc/fstab' will be created.
 The mountpoints directory will be removed from the image, so it is recommended
@@ -139,6 +144,7 @@ type Partition struct {
 	End    string
 	FS     string
 	Flags  []string
+	NoFsck bool "no_fsck"
 	FSUUID string
 }
 
@@ -176,9 +182,19 @@ func (i *ImagePartitionAction) generateFSTab(context *debos.DebosContext) error 
 		if m.part.FSUUID == "" {
 			return fmt.Errorf("Missing fs UUID for partition %s!?!", m.part.Name)
 		}
-		context.ImageFSTab.WriteString(fmt.Sprintf("UUID=%s\t%s\t%s\t%s\t0\t0\n",
+
+		fs_passno := 0
+
+		if !m.part.NoFsck {
+			if m.Mountpoint == "/" {
+				fs_passno = 1
+			} else {
+				fs_passno = 2
+			}
+		}
+		context.ImageFSTab.WriteString(fmt.Sprintf("UUID=%s\t%s\t%s\t%s\t0\t%d\n",
 			m.part.FSUUID, m.Mountpoint, m.part.FS,
-			strings.Join(options, ",")))
+			strings.Join(options, ","), fs_passno))
 	}
 
 	return nil
